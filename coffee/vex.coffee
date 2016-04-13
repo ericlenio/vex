@@ -2,24 +2,57 @@ vexFactory = ($) ->
 
     animationEndSupport = false
 
-    $ ->
-        # Detect CSS Animation Support
+    # Detect CSS Animation Support
 
-        s = (document.body || document.documentElement).style
-        animationEndSupport = s.animation isnt undefined or s.WebkitAnimation isnt undefined or s.MozAnimation isnt undefined or s.MsAnimation isnt undefined or s.OAnimation isnt undefined
+    s = (document.body || document.documentElement).style
+    animationEndSupport = s.animation isnt undefined or s.WebkitAnimation isnt undefined or s.MozAnimation isnt undefined or s.MsAnimation isnt undefined or s.OAnimation isnt undefined
 
-        # Register global handler for ESC
+    # Register global handler for ESC
 
-        $(window).bind 'keyup.vex', (event) ->
-            vex.closeByEscape() if event.keyCode is 27
+    window.addEventListener 'keyup', (event) ->
+        vex.closeByEscape() if event.keyCode is 27
 
     # Vex
+
+    triggerCustom = (el, evtName, data) ->
+        if window.CustomEvent
+            event = new CustomEvent evtName, {detail: data}
+        else
+            event = document.createEvent('CustomEvent')
+            event.initCustomEvent evtName, true, true, data
+        el.dispatchEvent event
+
+    addClass = (el, spaceSeparatedClassList) ->
+      if spaceSeparatedClassList
+        spaceSeparatedClassList.split(/\s+/).map (cls) ->
+            el.classList.add cls
 
     vex =
 
         globalID: 1
 
+        textToDOM: (htmlString) ->
+            # wrap text in a div to take advantage of innerHTML converting it
+            # to DOM
+            div = document.createElement('div')
+            div.innerHTML = htmlString
+            children = div.children.length
+            return div.children[0] if children == 1
+            return div
+
+        # simulate jquery's extend
+        extend: (out) ->
+            out = out || {};
+            for i in [1...arguments.length]
+                continue if not arguments[i]
+                for key of arguments[i]
+                    out[key] = arguments[i][key]
+            out
+
         animationEndEvent: 'animationend webkitAnimationEnd mozAnimationEnd MSAnimationEnd oanimationend' # Inconsistent casings are intentional http://stackoverflow.com/a/12958895/131898
+
+        # store each vex's options in this hash
+        optionsHash: {}
 
         baseClassNames:
             vex: 'vex'
@@ -45,60 +78,57 @@ vexFactory = ($) ->
             closeCSS: {}
 
         open: (options) ->
-            options = $.extend {}, vex.defaultOptions, options
+            options = vex.extend {}, vex.defaultOptions, options
 
             options.id = vex.globalID
             vex.globalID += 1
+            vex.optionsHash[options.id] = options
 
             # Vex
 
-            options.$vex = $('<div>')
-                .addClass(vex.baseClassNames.vex)
-                .addClass(options.className)
-                .css(options.css)
-                .data(vex: options)
+            options.$vex = document.createElement 'div'
+            addClass options.$vex, vex.baseClassNames.vex
+            addClass options.$vex, options.className
+            options.$vex.setAttribute "data-vex-id", options.id
 
             # Overlay
 
-            options.$vexOverlay = $('<div>')
-                .addClass(vex.baseClassNames.overlay)
-                .addClass(options.overlayClassName)
-                .css(options.overlayCSS)
-                .data(vex: options)
+            options.$vexOverlay = document.createElement 'div'
+            addClass options.$vexOverlay, vex.baseClassNames.overlay
+            addClass options.$vexOverlay, options.overlayClassName
+            options.$vexOverlay.setAttribute "data-vex-id", options.id
 
             if options.overlayClosesOnClick
-                options.$vexOverlay.bind 'click.vex', (e) ->
+                options.$vexOverlay.addEventListener 'click', (e) ->
                     return unless e.target is @
-                    vex.close $(@).data().vex.id
+                    vex.close options.id
 
-            options.$vex.append options.$vexOverlay
+            options.$vex.appendChild options.$vexOverlay
 
             # Content
 
-            options.$vexContent = $('<div>')
-                .addClass(vex.baseClassNames.content)
-                .addClass(options.contentClassName)
-                .css(options.contentCSS)
-                .append(options.content)
-                .data(vex: options)
+            options.$vexContent = document.createElement 'div'
+            addClass options.$vexContent, vex.baseClassNames.content
+            addClass options.$vexContent, options.contentClassName
+            options.$vexContent.setAttribute "data-vex-id", options.id
+            options.$vexContent.appendChild options.content
 
-            options.$vex.append options.$vexContent
+            options.$vex.appendChild options.$vexContent
 
             # Close button
 
             if options.showCloseButton
-                options.$closeButton = $('<div>')
-                    .addClass(vex.baseClassNames.close)
-                    .addClass(options.closeClassName)
-                    .css(options.closeCSS)
-                    .data(vex: options)
-                    .bind('click.vex', -> vex.close $(@).data().vex.id)
+                options.$closeButton = document.createElement 'div'
+                addClass options.$closeButton, vex.baseClassNames.close
+                addClass options.$closeButton, options.closeClassName
+                options.$closeButton.setAttribute "data-vex-id", options.id
+                options.$closeButton.addEventListener 'click', (event) -> vex.close event.target.getAttribute "data-vex-id"
 
-                options.$vexContent.append options.$closeButton
+                options.$vexContent.appendChild options.$closeButton
 
             # Inject DOM and trigger callbacks/events
 
-            $(options.appendLocation).append options.$vex
+            document.querySelector(options.appendLocation).appendChild(options.$vex)
 
             # Set up body className
 
@@ -107,7 +137,7 @@ vexFactory = ($) ->
             # Call afterOpen callback and trigger vexOpen event
 
             options.afterOpen options.$vexContent, options if options.afterOpen
-            setTimeout (-> options.$vexContent.trigger 'vexOpen', options), 0
+            setTimeout (-> triggerCustom options.$vexContent, 'vexOpen', options), 0
 
             return options.$vexContent # For chaining
 
@@ -115,86 +145,95 @@ vexFactory = ($) ->
             return ".#{baseClass.split(' ').join('.')}"
 
         getAllVexes: ->
-            return $(""".#{vex.baseClassNames.vex}:not(".#{vex.baseClassNames.closing}") #{vex.getSelectorFromBaseClass(vex.baseClassNames.content)}""")
+            vexes = Array.prototype.filter.call(
+                document.querySelectorAll("."+vex.baseClassNames.vex),
+                (el) ->
+                    if el.classList.contains(vex.baseClassNames.closing)
+                        return false
+                    return true
+            )
+            selector = vex.getSelectorFromBaseClass(vex.baseClassNames.content)
+            return vexes.map( (vex) ->
+                return vex.querySelector( selector )
+                )
+
+        getOptionsById: (id) ->
+            return vex.optionsHash[id]
+
+        getVexId: (el) ->
+            if el == document.body
+                throw "getVexId: could not get vex id"
+            id = el.getAttribute("data-vex-id")
+            return vex.getVexId(el.parentNode) if !id
+            return id
 
         getVexByID: (id) ->
-            return vex.getAllVexes().filter(-> $(@).data().vex.id is id)
+            vexes = vex.getAllVexes().filter (el) ->
+                return Number(el.getAttribute("data-vex-id")) == Number(id)
+            if vexes.length
+                return vexes.shift()
+            return null
 
         close: (id) ->
             if not id
-                $lastVex = vex.getAllVexes().last()
-                return false unless $lastVex.length
-                id = $lastVex.data().vex.id
-
+                vexes = vex.getAllVexes
+                return false if not vexes.length
+                id = vexes.pop().getAttribute("data-vex-id")
             return vex.closeByID id
 
-        closeAll: ->
-            ids = vex.getAllVexes().map(-> $(@).data().vex.id).toArray()
-            return false unless ids?.length
-
-            $.each ids.reverse(), (index, id) -> vex.closeByID id
-
-            return true
-
         closeByID: (id) ->
-            $vexContent = vex.getVexByID id
-            return unless $vexContent.length
-
-            $vex = $vexContent.data().vex.$vex
-
-            options = $.extend {}, $vexContent.data().vex
-
+            options = vex.getOptionsById(id)
+            $vexContent = vex.getVexByID(id)
+            return if not $vexContent
+            $vex = $vexContent.parentNode
             beforeClose = ->
-                options.beforeClose $vexContent, options if options.beforeClose
-
+                if options.beforeClose
+                    options.beforeClose($vexContent, options)
             close = ->
-                $vexContent.trigger 'vexClose', options
-                $vex.remove()
-                $('body').trigger 'vexAfterClose', options # Triggered on the body since $vexContent was removed
-                options.afterClose $vexContent, options if options.afterClose
+                return unless id of vex.optionsHash
+                delete vex.optionsHash[id]
+                triggerCustom($vexContent, 'vexClose', options)
+                $vex.parentNode.removeChild($vex)
+                triggerCustom(document.body, 'vexAfterClose', options)
+                options.afterClose($vexContent, options) if options.afterClose
 
-            hasAnimation = $vexContent.css('animationName') != 'none' && $vexContent.css('animationDuration') != '0s'
-
+            hasAnimation = $vexContent.style.animationName != 'none' && $vexContent.style.animationDuration != '0s';
             if animationEndSupport && hasAnimation
-                unless beforeClose() is false
-                    $vex
-                        .unbind(vex.animationEndEvent).bind(vex.animationEndEvent, -> close())
-                        .addClass(vex.baseClassNames.closing)
-
+                if beforeClose() != false
+                    $vex.classList.add vex.baseClassNames.closing
+                    vex.animationEndEvent.split(/\s+/).map( (evtName) ->
+                        $vex.addEventListener(evtName, (event) ->
+                            close()
+                        )
+                    )
             else
-                unless beforeClose() is false
+                if beforeClose() != false
                     close()
-
             return true
 
         closeByEscape: ->
-            ids = vex.getAllVexes().map(-> $(@).data().vex.id).toArray()
-            return false unless ids?.length
-
-            id = Math.max ids...
-            $lastVex = vex.getVexByID id
-            return false if $lastVex.data().vex.escapeButtonCloses isnt true
-
-            return vex.closeByID id
+            ids = vex.getAllVexes().map( (el) ->
+                return el.getAttribute('data-vex-id')
+            )
+            return if not ids or not ids.length
+            id = Math.max.apply(Math,ids)
+            $lastVex = vex.getVexByID(id)
+            options = vex.getOptionsById(id)
+            return if not options.escapeButtonCloses
+            return vex.closeByID(id)
 
         setupBodyClassName: ($vex) ->
-            $('body')
-                .bind('vexOpen.vex', -> $('body').addClass(vex.baseClassNames.open))
-                .bind('vexAfterClose.vex', -> $('body').removeClass(vex.baseClassNames.open) unless vex.getAllVexes().length)
+            body = document.body
+            body.addEventListener('vexOpen', -> body.classList.add(vex.baseClassNames.open))
+            body.addEventListener('vexAfterClose', -> body.classList.remove(vex.baseClassNames.open) unless vex.getAllVexes().length)
 
-        hideLoading:  ->
-            $('.vex-loading-spinner').remove()
-
-        showLoading: ->
-            vex.hideLoading()
-            $('body').append("""<div class="vex-loading-spinner #{vex.defaultOptions.className}"></div>""")
 
 if typeof define is 'function' and define.amd
     # AMD
-    define ['jquery'], vexFactory
+    define vexFactory
 else if typeof exports is 'object'
     # CommonJS
-    module.exports = vexFactory require('jquery')
+    module.exports = vexFactory()
 else
     # Global
-    window.vex = vexFactory jQuery
+    window.vex = vexFactory()
